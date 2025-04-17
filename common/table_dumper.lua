@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.0.0
+-- Version = 1.0.1
 
 --[[ 使い方 - 簡易版 -
   local table_dumper = require("table_dumper")
@@ -15,30 +15,32 @@
   
   戻り値の文字列の例:
   my_table = {
-    num = 123,
-    str = "123",
-    tbl_A = {
-      func = function: 00000257ebc971e0,
-      multi_line = "1行目
-                    2行目
-                    3行目",
-      tbl_B = {
+    123 = 123,
+    "123" = 123,
+    "str" = "123",
+    "tbl_A" = {
+      "func" = function: 00000257ebc971e0,
+      "multi_line" = "1行目
+                      2行目
+                      3行目",
+      "tbl_B" = {
         * 既に表示済み(循環参照) -> my_table.tbl_A
       },
-      tbl_C = {
+      "tbl_C" = {
       },
       <tostring() = "1行目
                      2行目
                      3行目">
     },
-    tbl_D = {
+    "tbl_D" = {
       * 既に表示済み(共有参照) -> my_table.tbl_A.tbl_C
     },
   }
   数字と文字列は、"" がついているかどうかで区別できます
+  
   insert_indent が false の場合は以下のようになります
   my_table2 = {
-    multi_line = "1行目
+    "multi_line" = "1行目
   2行目
   3行目",
     <tostring() = "1行目
@@ -51,13 +53,15 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.0.0"
+local VERSION = "1.0.1"
 
 -- モジュールのインポート
 local string_builder = require("string_builder") -- 文字列を継ぎ足して1つの文字列にする
 
 -- デフォルトのロガーの宣言
 local Logger
+-- 関数の宣言
+local is_array
 
 -- テーブルを表示するメソッドが入った本体
 local TableDumper
@@ -144,10 +148,10 @@ TableDumper = {
             error(sb:tostring())
           else
             logger.error(sb:tostring())
-            log_debug(1, "エラーが発生したため、dump() を終了します -> 戻り値: \"\"")
+            log_debug(1, "エラーが発生したため、dump() を終了します -> 戻り値: nil")
           end
           
-          return ""
+          return nil
         end
         
         -- tbl が table型だった時の処理
@@ -225,7 +229,7 @@ TableDumper = {
         
         log_debug(2, "_inner_dump() が呼ばれました -> key: " .. key_to_str(key))
         
-        indent = indent or ""
+        indent = tostring(indent or "")
         visited = visited or {}
         
         -- 循環参照検出時
@@ -243,9 +247,16 @@ TableDumper = {
         -- tbl をダンプ済みテーブルとしてマークする
         visited[tbl] = key
         
-        -- テーブルに含まれる要素をチェックし、値の型によって動作を分ける
-        for k, v in pairs(tbl) do
-          local key_str = tostring(k)-- キー名を安全に結合できるように string にする
+        -- 配列と配列以外でソートするかどうかを分けるので、中身を関数に分ける
+        local do_dump = function(k, v)
+          -- テーブルに含まれる要素をチェックし、値の型によって動作を分ける
+          local key_str
+          -- キーが string の時は "" で囲む
+          if type(k) == "string" then
+            key_str = "\"" .. k .. "\""
+          else
+            key_str = tostring(k) -- キー名を安全に結合できるように string にする
+          end
           local value_type = type(v)
           if value_type == "table" then
             -- 値がテーブルの時は、再帰的に子要素を検索
@@ -266,6 +277,12 @@ TableDumper = {
             -- 値がそれ以外の時は、そのまま string に変換して出力
             sb:append_line(indent .. key_str .. " = " .. tostring(v) .. ",")
           end
+        end
+        -- ソートするかどうかを分ける
+        if is_array(tbl) then
+          for i, v in ipairs(tbl) do do_dump(i, v) end
+        else
+          for k, v in pairs(tbl) do do_dump(k, v) end
         end
         
         -- 最後に __tostring があるものは、それを追記する
@@ -344,6 +361,28 @@ Logger = {
     print("Error: " .. tostring(msg))
   end,
 }
+
+-- テーブルが連続した数値キーのみを持っているかを判定
+is_array = function(tbl)
+  local count = 0 -- 長さをカウント
+
+  -- 最初に、キーがすべて数値かつ正の整数であることを確認
+  for k, _ in pairs(tbl) do
+    if type(k) ~= "number" or k % 1 ~= 0 or k < 1 then
+      return false -- 数値でない or 整数でない or 負のインデックス → 配列ではない
+    end
+    count = count + 1
+  end
+
+  -- 1 から #tbl までがすべて埋まっているか確認
+  for i = 1, count do
+    if tbl[i] == nil then
+      return false -- 欠番がある
+    end
+  end
+
+  return true
+end
 
 return TableDumper
 
