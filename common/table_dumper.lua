@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.0.1
+-- Version = 1.0.2
 
 --[[ 使い方 - 簡易版 -
   local table_dumper = require("table_dumper")
@@ -53,7 +53,7 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.0.1"
+local VERSION = "1.0.2"
 
 -- モジュールのインポート
 local string_builder = require("string_builder") -- 文字列を継ぎ足して1つの文字列にする
@@ -62,6 +62,13 @@ local string_builder = require("string_builder") -- 文字列を継ぎ足して1
 local Logger
 -- 関数の宣言
 local is_array
+local comparator
+
+-- __tostring が定義されているかどうかを判定する
+local has_tostring = function(value)
+  local mt = getmetatable(value)
+  return mt ~= nil and type(mt.__tostring) == "function"
+end
 
 -- テーブルを表示するメソッドが入った本体
 local TableDumper
@@ -111,6 +118,9 @@ TableDumper = {
       
       -- tostring() を表示する時に、改行後にインデントを挿入するかどうか。0 で insert_indent の値を使います
       insert_indent_tostring = TableDumper.insert_indent_tostring,
+      
+      -- キーをソートする時に用いる関数
+      comparator = comparator,
       
       -- テーブルの中身を再帰的に表示する
       -- 循環参照も OK
@@ -247,8 +257,14 @@ TableDumper = {
         -- tbl をダンプ済みテーブルとしてマークする
         visited[tbl] = key
         
-        -- 配列と配列以外でソートするかどうかを分けるので、中身を関数に分ける
-        local do_dump = function(k, v)
+        -- ソートする
+        local list = {}
+        for key in pairs(tbl) do list[#list + 1] = key end
+        table.sort(list, self.comparator)
+        
+        -- ループ
+        for _, k in ipairs(list) do
+          local v = tbl[k]
           -- テーブルに含まれる要素をチェックし、値の型によって動作を分ける
           local key_str
           -- キーが string の時は "" で囲む
@@ -278,16 +294,9 @@ TableDumper = {
             sb:append_line(indent .. key_str .. " = " .. tostring(v) .. ",")
           end
         end
-        -- ソートするかどうかを分ける
-        if is_array(tbl) then
-          for i, v in ipairs(tbl) do do_dump(i, v) end
-        else
-          for k, v in pairs(tbl) do do_dump(k, v) end
-        end
         
         -- 最後に __tostring があるものは、それを追記する
-        local mt = getmetatable(tbl)
-        if mt and type(mt.__tostring) == "function" then -- メタテーブルに __tostring が設定されている場合
+        if has_tostring(tbl) then -- メタテーブルに __tostring が設定されている場合
           local tbl_tostring = tostring(tbl)
           local prefix = "<tostring() = \""
           -- インデントを付ける
@@ -336,6 +345,7 @@ TableDumper.insert_indent_tostring:boolean or 0 -- テーブルを tostring() �
 
 TableDumper.new(引数).insert_indent:boolean -- 文字列に改行が含まれていた時に、改行後にインデントを挿入するかどうか
 TableDumper.new(引数).insert_indent_tostring:boolean or 0 -- テーブルを tostring() した文字列に改行が含まれていた時に、改行後にインデントを挿入するかどうか。0 で insert_indent の値を使います
+TableDumper.new(引数).comparator:function -- テーブルのキーをソートする時に用いる比較用の関数。function(a, b) で a < b の時 true を返す関数
 TableDumper.new(引数).verbose_level:number -- デバッグログを出したい時に設定します。1で通常、2で詳細な出力になります
 TableDumper.new(引数).strict_mode:boolean -- true にするとエラーログの代わりにエラーを投げます
 TableDumper.new(引数).top_table_name:string -- dump() のテーブル名を省略した場合に、代わりに表示される名前です(循環参照検出時のみ)
@@ -362,26 +372,36 @@ Logger = {
   end,
 }
 
--- テーブルが連続した数値キーのみを持っているかを判定
-is_array = function(tbl)
-  local count = 0 -- 長さをカウント
-
-  -- 最初に、キーがすべて数値かつ正の整数であることを確認
-  for k, _ in pairs(tbl) do
-    if type(k) ~= "number" or k % 1 ~= 0 or k < 1 then
-      return false -- 数値でない or 整数でない or 負のインデックス → 配列ではない
-    end
-    count = count + 1
-  end
-
-  -- 1 から #tbl までがすべて埋まっているか確認
-  for i = 1, count do
-    if tbl[i] == nil then
-      return false -- 欠番がある
+-- キーをソートする時に用いる関数
+comparator = function(a, b)
+  local type_a = type(a)
+  local type_b = type(b)
+  -- 文字列にして比較
+  if (type_a == "string" or type_a == "number" or type_a == "boolean" or has_tostring(a)) and
+     (type_b == "string" or type_b == "number" or type_b == "boolean" or has_tostring(b)) then
+    if tostring(a) ~= tostring(b) then
+      return tostring(a) < tostring(b)
     end
   end
-
-  return true
+  -- 型名を比較
+  if type_a ~= type_b then
+    return type_a < type_b
+  end
+  -- 関数ならデバッグ情報から比較
+  if type_a == "function" then
+    local info_a = debug.getinfo(a)
+    local info_b = debug.getinfo(b)
+    -- 記述されているファイル名で比較
+    if info_a.source ~= info_b.source then
+      return info_a.source < info_b.source
+    end
+    -- 記述位置で比較
+    if info_a.linedefined ~= info_b.linedefined then
+      return info_a.linedefined < info_b.linedefined
+    end
+  end
+  
+  return false -- それ以外は判定不可
 end
 
 return TableDumper
