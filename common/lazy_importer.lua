@@ -96,7 +96,11 @@ LazyImporter = {
           return get_module()(...)
         end,
         
-        __metatable = false,
+        __tostring = function(_)
+          return tostring(get_module())
+        end,
+        
+        __metatable = false, -- メタテーブルを変更不可にする
       })
       
       return proxy_module

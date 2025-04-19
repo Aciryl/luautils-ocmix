@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.1.1
+-- Version = 1.1.2
 
 --[[ 使い方
   local table_dumper = require("table_dumper")
@@ -53,15 +53,44 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.1.1"
+local VERSION = "1.1.2"
 
 -- モジュールの読み込み
 local importer = require("lazy_importer")
 local string_builder = importer("string_builder") -- 文字列を継ぎ足して1つの文字列にする
 local default_logger = importer("simple_logger", true) -- デフォルトで使用するロガー(遅延読み込み)
 
--- 関数の宣言
-local comparator
+-- キーをソートする時に用いる関数
+local comparator = function(a, b)
+  local type_a = type(a)
+  local type_b = type(b)
+  -- 文字列にして比較
+  if (type_a == "string" or type_a == "number" or type_a == "boolean" or has_tostring(a)) and
+     (type_b == "string" or type_b == "number" or type_b == "boolean" or has_tostring(b)) then
+    if tostring(a) ~= tostring(b) then
+      return tostring(a) < tostring(b)
+    end
+  end
+  -- 型名を比較
+  if type_a ~= type_b then
+    return type_a < type_b
+  end
+  -- 関数ならデバッグ情報から比較
+  if type_a == "function" then
+    local info_a = debug.getinfo(a)
+    local info_b = debug.getinfo(b)
+    -- 記述されているファイル名で比較
+    if info_a.source ~= info_b.source then
+      return info_a.source < info_b.source
+    end
+    -- 記述位置で比較
+    if info_a.linedefined ~= info_b.linedefined then
+      return info_a.linedefined < info_b.linedefined
+    end
+  end
+  
+  return false -- それ以外は判定不可
+end
 
 -- __tostring が定義されているかどうかを判定する
 local has_tostring = function(value)
@@ -73,11 +102,11 @@ end
 -- TableDumper
 ---------------
 -- TableDumper.new() をしないでいきなり dump() などを呼んだ時に使う
+-- また、new() する時の初期値を保存するためにも使う
 -- TableDumper の定義の下で setmetatable() に使っています
 local default_obj
 
 -- TableDumper.new() のオプションの初期値
--- default_obj のオプションは、常にこの値で更新されます
 local td_instance_defaults = {
   -- テーブルを表示する際の、1階層ごとにつけるインデント
   indent_unit = "  ",
@@ -108,6 +137,23 @@ local td_instance_defaults = {
   -- 表示する値を選別する関数。function(value:全ての型):boolean の形で、true を返した値のみを表示します
   -- nil を設定すると、フィルタリングをスキップします(全て表示)
   value_filter = nil,
+  
+  -- dump() のテーブル名を省略した場合に、代わりに表示される名前(循環参照検出時のみ)
+  top_table_name = "<top_table>",
+  
+  -- true にするとエラーログの代わりにエラーを投げます
+  strict_mode = false,
+  
+  -- 値をダンプする直前に呼ばれるフック。function(key:全ての型, value:全ての型, key_str:string, value_str:string, key_array:table) の形で、key と value は生のキーと値、key_str と value_str は実際に表示するキーと値の文字列、key_array は親のキーから順番に子どものキーを挿入していった文字列の配列です
+  on_value_dumped = nil,
+  
+  -- キーを string に変換する関数。function(key:全ての型, key_str:string):string という形で、key は生のキー、key_str はキーをデフォルトの変換方式で変換した文字列です。戻り値を tostring() したものを使います。function の代わりに nil を設定すると、デフォルトの変換方式で表示します
+  key_formatter = nil,
+  -- 値を string に変換する関数。function(value:全ての型, value_str:string):string という形で、value は生の値、value_str は値をデフォルトの変換方式で変換した文字列です。戻り値を tostring() したものを使います。function の代わりに nil を設定すると、デフォルトの変換方式で表示します
+  value_formatter = nil,
+  
+  -- キーをソートする時に用いる関数
+  comparator = comparator,
   
   -- エラーなどを出力するロガー
   -- logger.error(msg:string) または logger.debug(msg:string) という形式でログ出力をするテーブルを想定しています
@@ -143,46 +189,35 @@ TableDumper = {
   new = function(logger, verbose_level)
     -- 戻り値のテーブル(オブジェクト)を作成
     -- 関数は下で定義しています
-    local obj = {
-      -- true にするとエラーログの代わりにエラーを投げます
-      strict_mode = false,
-      
-      -- dump() で tbl_name (テーブル名)が未指定の時に、循環参照検出時に代わりに表示する名前
-      top_table_name = "<top_table>",
-      
-      -- 値をダンプする直前に呼ばれるフック。function(key:全ての型, value:全ての型, key_str:string, value_str:string, key_array:table) の形で、key と value は生のキーと値、key_str と value_str は実際に表示するキーと値の文字列、key_array は親のキーから順番に子どものキーを挿入していった文字列の配列です
-      on_value_dumped = nil,
-      
-      -- キーを string に変換する関数。function(key:全ての型, key_str:string):string という形で、key は生のキー、key_str はキーをデフォルトの変換方式で変換した文字列です。戻り値を tostring() したものを使います。function の代わりに nil を設定すると、デフォルトの変換方式で表示します
-      key_formatter = nil,
-      -- 値を string に変換する関数。function(value:全ての型, value_str:string):string という形で、value は生の値、value_str は値をデフォルトの変換方式で変換した文字列です。戻り値を tostring() したものを使います。function の代わりに nil を設定すると、デフォルトの変換方式で表示します
-      value_formatter = nil,
-      
-      -- キーをソートする時に用いる関数
-      comparator = comparator,
-    }
+    local obj = {}
     
     -- 作ったタイミングの初期値を設定する
-    -- ※ for 文を使うと、OC 環境では動かなかった(普通の環境では正しく動いた)
+    -- ※ for 文を使うと、OC 環境では動かなかった(通常環境では正しく動いた)
     -- for k, v in pairs(td_instance_defaults) do
     --   obj[k] = v
     -- end
-    obj.indent_unit = td_instance_defaults.indent_unit
-    obj.insert_indent = td_instance_defaults.insert_indent
-    obj.insert_indent_tostring = td_instance_defaults.insert_indent_tostring
-    obj.max_depth = td_instance_defaults.max_depth
-    obj.max_items_per_table = td_instance_defaults.max_items_per_table
-    obj.show_tostring = td_instance_defaults.show_tostring
-    obj.show_metatable = td_instance_defaults.show_metatable
-    obj.ignore_key_types = td_instance_defaults.ignore_key_types
-    obj.ignore_value_types = td_instance_defaults.ignore_value_types
-    obj.key_filter = td_instance_defaults.key_filter
-    obj.value_filter = td_instance_defaults.value_filter
-    obj.logger = td_instance_defaults.logger
-    obj.verbose_level = td_instance_defaults.verbose_level
+    local template = default_obj or td_instance_defaults
+    obj.indent_unit = template.indent_unit
+    obj.insert_indent = template.insert_indent
+    obj.insert_indent_tostring = template.insert_indent_tostring
+    obj.max_depth = template.max_depth
+    obj.max_items_per_table = template.max_items_per_table
+    obj.show_tostring = template.show_tostring
+    obj.show_metatable = template.show_metatable
+    obj.ignore_key_types = template.ignore_key_types
+    obj.ignore_value_types = template.ignore_value_types
+    obj.key_filter = template.key_filter
+    obj.value_filter = template.value_filter
+    obj.top_table_name = template.top_table_name
+    obj.strict_mode = template.strict_mode
+    obj.on_value_dumped = template.on_value_dumped
+    obj.key_formatter = template.key_formatter
+    obj.value_formatter = template.value_formatter
+    obj.comparator = template.comparator
+    obj.logger = template.logger
+    obj.verbose_level = template.verbose_level
     
-    -- logger が省略された場合は、default_logger を使う
-    obj.logger = logger or obj.logger or default_logger
+    obj.logger = logger or obj.logger
     obj.verbose_level = verbose_level or obj.verbose_level
     
     -- メソッドを分ける
@@ -213,8 +248,8 @@ setmetatable(TableDumper, {
   end,
   
   __newindex = function(_, key, value)
-    td_instance_defaults[key] = value
-    rawset(get_default_obj(), key, value) -- default_obj の値も更新
+    --td_instance_defaults[key] = value -- いらない
+    rawset(get_default_obj(), key, value) -- default_obj の値を更新
   end,
   
   __tostring = function(_)
@@ -223,8 +258,12 @@ setmetatable(TableDumper, {
 TableDumper.VERSION:string -- table_dumper モジュールのバージョンです。変更しないでください
 
 <-オプション->
-※ TableDumperの(new(引数)でない)オプションは、new().同名オプションの初期値に使われます
-TableDumper.indent_unit:string -- テーブルを階層表示する時に、1階層ごとにつけるインデントです
+※ TableDumperのオプションは、全て new() に同名のオプションがあります
+※ TableDumperのオプションは、new().同名オプションの初期値に使われます
+TableDumper.logger:table -- エラーなどを出力するロガー。logger.error(msg:string) または logger.debug(msg:string) という形式でログ出力をするテーブルを想定しています。お使いのロガーと関数名などが合わない場合は、ラッパーを使用してください。nil を設定すると、デフォルトのロガーが使われます
+※ TableDumper.new(引数).logger には nil を設定しないでください
+TableDumper.verbose_level:number -- デバッグログを出したい時に設定します。0でログなし、1で通常、2で詳細な出力になります
+TableDumper.indent_unit:string -- テーブルを階層表示する時に、1階層ごとにつけるインデント
 TableDumper.insert_indent:boolean -- 文字列に改行が含まれていた時に、改行後にインデントを挿入するかどうか
 TableDumper.insert_indent_tostring:boolean or 0 -- テーブルを tostring() した文字列に改行が含まれていた時に、改行後にインデントを挿入するかどうか。0 で insert_indent の値を使います
 TableDumper.max_depth:number -- ネストしたテーブルを表示する最大深度。-1 で制限なし
@@ -234,29 +273,13 @@ TableDumper.show_metatable:boolean -- メタテーブルが設定されている
 TableDumper.ignore_key_types:table -- 表示をスキップするキーの型一覧。{ function = true } のように書く。値が nil か false なら表示されます
 TableDumper.ignore_value_types:table -- 表示をスキップする値の型一覧。{ function = true } のように書く。値が nil か false なら表示されます
 TableDumper.key_filter:function or nil -- 表示するキーを選別する関数。function(key:全ての型):boolean の形で、true を返したキーのみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
-TableDumper.value_filter:function or nil -- 表示する値を選別する関数。function(key:全ての型):boolean の形で、true を返した値のみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
-TableDumper.logger:table -- エラーなどを出力するロガー。logger.error(msg:string) または logger.debug(msg:string) という形式でログ出力をするテーブルを想定しています。お使いのロガーと関数名などが合わない場合は、ラッパーを使用してください。nil を設定すると、デフォルトのロガーが使われます
-TableDumper.verbose_level:number -- デバッグログを出したい時に設定します。0でログなし、1で通常、2で詳細な出力になります
-
-------------------------------
-TableDumper.new(引数).insert_indent:boolean -- 文字列に改行が含まれていた時に、改行後にインデントを挿入するかどうか
-TableDumper.new(引数).insert_indent_tostring:boolean or 0 -- テーブルを tostring() した文字列に改行が含まれていた時に、改行後にインデントを挿入するかどうか。0 で insert_indent の値を使います
-TableDumper.new(引数).max_depth:number -- ネストしたテーブルを表示する最大深度。-1 で制限なし
-TableDumper.new(引数).max_items_per_table:number -- 1つのテーブルに表示する、最大の要素の数。-1 で制限なし
-TableDumper.new(引数).show_tostring:boolean -- テーブルに __tostring が設定されている時に、tostring(<テーブル>) の内容も表示するかどうか
-TableDumper.new(引数).show_metatable:boolean -- メタテーブルが設定されているかどうかの表示フラグ
-TableDumper.new(引数).ignore_key_types:table -- 表示をスキップするキーの型一覧。{ function = true } のように書く。値が nil か false なら表示されます
-TableDumper.new(引数).ignore_value_types:table -- 表示をスキップする値の型一覧。{ function = true } のように書く。値が nil か false なら表示されます
-TableDumper.new(引数).key_filter:function or nil -- 表示するキーを選別する関数。function(key:全ての型):boolean の形で、true を返したキーのみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
-TableDumper.new(引数).value_filter:function or nil -- 表示する値を選別する関数。function(key:全ての型):boolean の形で、true を返した値のみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
-TableDumper.new(引数).logger:table -- エラーなどを出力するロガー。logger.error(msg:string) または logger.debug(msg:string) という形式でログ出力をするテーブルを想定しています。お使いのロガーと関数名などが合わない場合は、ラッパーを使用してください。※ nil を設定しないでください
-TableDumper.new(引数).verbose_level:number -- デバッグログを出したい時に設定します。0でログなし、1で通常、2で詳細な出力になります
-TableDumper.new(引数).strict_mode:boolean -- true にするとエラーログの代わりにエラーを投げます
-TableDumper.new(引数).comparator:function -- テーブルのキーをソートする時に用いる比較用の関数。function(a, b) で a < b の時 true を返す関数
-TableDumper.new(引数).top_table_name:string -- dump() のテーブル名を省略した場合に、代わりに表示される名前です(循環参照検出時のみ)
-TableDumper.new(引数).on_value_dumped:function or nil -- 値をダンプする直前に呼ばれるフック。function(key:全ての型, value:全ての型, key_str:string, value_str:string, key_array:table) の形で、key と value は生のキーと値、key_str と value_str は実際に表示するキーと値の文字列、key_array は親のキーから順番に子どものキーを挿入していった文字列の配列です
-TableDumper.new(引数).key_formatter:function or nil -- キーを string に変換する関数。function(key:全ての型, key_str:string):string という形で、key は生のキー、key_str はキーをデフォルトの変換方式で変換した文字列です。戻り値を tostring() したものを使います。function の代わりに nil を設定すると、デフォルトの変換方式で表示します
-TableDumper.new(引数).value_formatter:function or nil -- 値を string に変換する関数。function(value:全ての型, value_str:string):string という形で、value は生の値、value_str は値をデフォルトの変換方式で変換した文字列です。戻り値を tostring() したものを使います。function の代わりに nil を設定すると、デフォルトの変換方式で表示します
+TableDumper.value_filter:function or nil -- 表示する値を選別する関数。function(value:全ての型):boolean の形で、true を返した値のみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
+TableDumper.comparator:function or nil -- テーブルのキーをソートする時に用いる比較用の関数。function(a:全ての型, b:全ての型):boolean の形式で a < b の時 true を返す関数
+TableDumper.top_table_name:string -- dump() のテーブル名を省略した場合に、代わりに表示される名前(循環参照検出時のみ)
+TableDumper.strict_mode:boolean -- true にするとエラーログの代わりにエラーを投げます
+TableDumper.on_value_dumped:function or nil -- 値をダンプする直前に呼ばれるフック。function(key:全ての型, value:全ての型, key_str:string, value_str:string, key_array:table) の形で、key と value は生のキーと値、key_str と value_str は実際に表示するキーと値の文字列、key_array は親のキーから順番に子どものキーを挿入していった文字列の配列です
+TableDumper.key_formatter:function or nil -- キーを string に変換する関数。function(key:全ての型, key_str:string):string という形式で、key は生のキー、key_str はキーをデフォルトの変換方式で変換した文字列です。戻り値を tostring() したものを使います。function の代わりに nil を設定すると、デフォルトの変換方式で表示します
+TableDumper.value_formatter:function or nil -- 値を string に変換する関数。function(value:全ての型, value_str:string):string という形式で、value は生の値、value_str は値をデフォルトの変換方式で変換した文字列です。戻り値を tostring() したものを使います。function の代わりに nil を設定すると、デフォルトの変換方式で表示します
 
 <-関数->
 TableDumper:dump(tbl:table[, tbl_name:string]):string -- テーブル(tbl)の中身を再帰的に表した文字列を返します。循環参照も OK。テーブル名(tbl_name)は戻り値のトップレベル名と、エラー出力時に使用されます
@@ -271,7 +294,7 @@ methods = {
   -- テーブルの中身を再帰的に表示する(循環参照も OK)
   -- tbl:table > 中身を表示したいテーブル
   -- [tbl_name:string] > テーブル名(省略可)
-  -- :string > 戻り値: テーブルの中身を表した文字列
+  -- :string > テーブルの中身を表した文字列(戻り値)
   dump = function(self, tbl, tbl_name)
     -- ロガーを使ってデバッグログを出力する関数
     -- logger.debug(msg:string) を想定、使用して出力します
@@ -304,16 +327,20 @@ methods = {
     if not self or
        type(self.dump) ~= "function" or
        type(self._inner_dump) ~= "function" then
-      error("関数: TableDumper.dump() でエラーが発生しました\n:dump() で呼んでください(.dump() で呼ばれました)")
+      error("関数: TableDumper:dump() でエラーが発生しました\n:dump() で呼んでください(.dump() で呼ばれました)")
     end
     
     -- ロガーのチェック
+    if self.logger == nil then
+      -- logger が省略された場合は、default_logger を使う
+      self.logger = default_logger
+    end
     if type(self.logger) ~= "table" then
-      error("関数: TableDumper.dump() でエラーが発生しました\nロガーがテーブルではありません -> 型: " .. type(self.logger))
+      error("関数: TableDumper:dump() でエラーが発生しました\nロガーがテーブルではありません -> 型: " .. type(self.logger))
     elseif type(self.logger.error) ~= "function" then
-      error("関数: TableDumper.dump() でエラーが発生しました\n<ロガー>.error が関数ではありません -> 型: " .. type(self.logger.error))
+      error("関数: TableDumper:dump() でエラーが発生しました\n<ロガー>.error が関数ではありません -> 型: " .. type(self.logger.error))
     elseif type(self.logger.debug) ~= "function" then
-      error("関数: TableDumper.dump() でエラーが発生しました\n<ロガー>.debug が関数ではありません -> 型: " .. type(self.logger.debug))
+      error("関数: TableDumper:dump() でエラーが発生しました\n<ロガー>.debug が関数ではありません -> 型: " .. type(self.logger.debug))
     end
     
     -- メッセージを格納する変数(1つにまとめて、ログ出力を1度にする)
@@ -322,8 +349,8 @@ methods = {
     -- verbose_level は先にチェック
     local v_level_type = type(self.verbose_level)
     if v_level_type ~= "number" then
-      sb:append_line("関数: TableDumper.dump() でエラーが発生しました")
-      sb:append_line("オプション: verbose_level は number型が必要です (現在の型: " .. v_level_type ..")")
+      sb:append_line("関数: TableDumper:dump() でエラーが発生しました")
+      sb:append_line("オプション: verbose_level は number型が必要です(現在の型: " .. v_level_type ..")")
       log_error(sb, false) -- エラーログを出力
       return nil
     end
@@ -348,8 +375,8 @@ methods = {
       
       -- エラーメッセージを格納する変数(1つにまとめて、ログ出力を1度にする)
       sb = string_builder.new()
-      sb:append_line("関数: TableDumper.dump() でエラーが発生しました")
-      sb:append("引数: tbl" .. tbl_name .. " は table型が必要です (受け取った型: " .. type(tbl) .. ")")
+      sb:append_line("関数: TableDumper:dump() でエラーが発生しました")
+      sb:append("引数: tbl" .. tbl_name .. " は table型が必要です(受け取った型: " .. type(tbl) .. ")")
       
       log_error(sb) -- エラーログを出力
       return nil
@@ -382,10 +409,10 @@ methods = {
   -- 実際にテーブルをダンプする関数(再帰関数)
   -- sb:string_builder > 結果を出力する string_builder
   -- tbl:table > ダンプするテーブル
-  -- key:table > 引数(tbl)が格納されている変数(キー)を Top から全て溜めたもの(循環参照検出時に使う)
-  -- [indent:string] > 現在のインデント(省略可)
+  -- key:table > 親から辿ってきたキー名が全て入った配列(循環参照検出時に使う)
+  -- indent:string > 現在のインデント
   -- [visited:table] > 既にダンプしたテーブルの一覧(循環参照検出時に使う)(省略可)
-  -- :string > 戻り値: テーブルをダンプした文字列
+  -- :string > テーブルをダンプした文字列(戻り値)
   _inner_dump = function(self, sb, tbl, key, indent, visited)
     -- ロガーを使ってデバッグログを出力する関数
     -- logger.debug(msg:string) を想定、使用して出力します
@@ -433,7 +460,6 @@ methods = {
     
     log_debug(2, "_inner_dump() が呼ばれました -> key: " .. helpers.key_to_str(key))
     
-    indent = tostring(indent or "")
     visited = visited or {}
     
     -- 最大深度判定
@@ -452,7 +478,7 @@ methods = {
       if helpers.starts_with_array(key, visited[tbl]) then ref = "循環参照" end
       -- 出力
       sb:append_line(indent .. "* 既に表示済み(" .. ref .. ") -> " .. helpers.key_to_str(visited[tbl]))
-      log_debug(2, "循環参照を検出したため、要素の検索を中止します -> 検出したkey: " .. helpers.key_to_str(visited[tbl]) .. " 現在のkey: " .. helpers.key_to_str(key))
+      log_debug(2, ref .. "を検出したため、要素の検索を中止します -> 検出したkey: " .. helpers.key_to_str(visited[tbl]) .. " 現在のkey: " .. helpers.key_to_str(key))
       return
     end
     -- tbl をダンプ済みテーブルとしてマークする
@@ -461,7 +487,7 @@ methods = {
     -- ソートする
     local list = {}
     for key2, _ in pairs(tbl) do list[#list + 1] = key2 end
-    table.sort(list, self.comparator)
+    if self.comparator then table.sort(list, self.comparator) end
     
     -- ループ
     local count = 1
@@ -493,12 +519,10 @@ methods = {
       else
         count = count + 1
         -- テーブルに含まれる要素をチェックし、値の型によって動作を分ける
-        local key_str
+        local key_str = tostring(k) -- キー名を結合できるように string にする
         -- キーが string の時は "" で囲む
         if type(k) == "string" then
-          key_str = "\"" .. k .. "\""
-        else
-          key_str = tostring(k) -- キー名を結合できるように string にする
+          key_str = "\"" .. key_str .. "\""
         end
         
         local value_type = type(v)
@@ -584,17 +608,23 @@ methods = {
     
     -- show_metatable が true の時はメタテーブルも表示する
     if self.show_metatable then
-      sb:append_line(indent .. "<metatable> = {")
-      -- メタテーブルをソートする
+      -- メタテーブルを取得
       list = {}
       local mt = getmetatable(tbl) or {}
       for key2, _ in pairs(mt) do list[#list + 1] = key2 end
-      table.sort(list, self.comparator)
-      -- キーが設定済みかどうかだけ書く
-      for _, k in ipairs(list) do
-        sb:append_line(indent .. self.indent_unit .. tostring(k) .. " : 設定済み")
+      -- メタテーブルが 1つ以上設定されているときだけ表示
+      if #list > 0 then
+        -- メタテーブルをソートする
+        if self.comparator then table.sort(list, self.comparator) end
+        
+        -- 出力
+        sb:append_line(indent .. "<metatable> = {")
+        -- キーが設定済みかどうかだけ書く
+        for _, k in ipairs(list) do
+          sb:append_line(indent .. self.indent_unit .. tostring(k) .. " : 設定済み")
+        end
+        sb:append_line(indent .. "}")
       end
-      sb:append_line(indent .. "}")
     end
     
     log_debug(2, "最後に到達したので _inner_dump() を終了します -> key: " .. helpers.key_to_str(key))
@@ -613,10 +643,10 @@ methods = {
           if allow_nil then exp_type = exp_type .. " または nil " end
           -- エラーを出力する
           if not errored then
-            sb:append_line("関数: TableDumper.dump() でエラーが発生しました")
+            sb:append_line("関数: TableDumper:dump() でエラーが発生しました")
             errored = true
           end
-          sb:append_line("オプション: " .. option_name .. " は " .. exp_type .. "が必要です (現在の型: " .. option_type ..")")
+          sb:append_line("オプション: " .. option_name .. " は " .. exp_type .. "が必要です(現在の型: " .. option_type ..")")
           
           return false
         end
@@ -642,7 +672,7 @@ methods = {
     result = type_check("on_value_dumped", type(self.on_value_dumped), "function", true) and result
     result = type_check("key_formatter", type(self.key_formatter), "function", true) and result
     result = type_check("value_formatter", type(self.value_formatter), "function", true) and result
-    result = type_check("comparator", type(self.comparator), "function") and result
+    result = type_check("comparator", type(self.comparator), "function", true) and result
     
     return result
   end,
@@ -683,37 +713,4 @@ helpers = {
   end,
 }
 
--- キーをソートする時に用いる関数
-comparator = function(a, b)
-  local type_a = type(a)
-  local type_b = type(b)
-  -- 文字列にして比較
-  if (type_a == "string" or type_a == "number" or type_a == "boolean" or has_tostring(a)) and
-     (type_b == "string" or type_b == "number" or type_b == "boolean" or has_tostring(b)) then
-    if tostring(a) ~= tostring(b) then
-      return tostring(a) < tostring(b)
-    end
-  end
-  -- 型名を比較
-  if type_a ~= type_b then
-    return type_a < type_b
-  end
-  -- 関数ならデバッグ情報から比較
-  if type_a == "function" then
-    local info_a = debug.getinfo(a)
-    local info_b = debug.getinfo(b)
-    -- 記述されているファイル名で比較
-    if info_a.source ~= info_b.source then
-      return info_a.source < info_b.source
-    end
-    -- 記述位置で比較
-    if info_a.linedefined ~= info_b.linedefined then
-      return info_a.linedefined < info_b.linedefined
-    end
-  end
-  
-  return false -- それ以外は判定不可
-end
-
 return TableDumper
-

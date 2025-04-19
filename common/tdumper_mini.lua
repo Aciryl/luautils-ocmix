@@ -38,14 +38,14 @@ TDumperMini = {
   -- テーブルの中身を再帰的に表示する(循環参照も OK)
   -- tbl:table > 中身を表示したいテーブル
   -- [tbl_name:string] > テーブル名(省略可)
-  -- :string > 戻り値: テーブルの中身を表した文字列
+  -- :string > テーブルの中身を表した文字列(戻り値)
   dump = function(tbl, tbl_name)
     local result = {} -- 出力を溜める配列
     
     -- tbl が table型では無かった時は、エラーメッセージを表示する
     if type(tbl) ~= "table" then
       table.insert(result, "関数: TDumperMini.dump() でエラーが発生しました")
-      table.insert(result, "引数: tbl(" .. tostring(tbl_name) .. ") は table型が必要です (受け取った型: " .. type(tbl) .. ")")
+      table.insert(result, "引数: tbl(" .. tostring(tbl_name) .. ") は table型が必要です(受け取った型: " .. type(tbl) .. ")")
       return table.concat(result, "\n")
     end
     
@@ -54,6 +54,7 @@ TDumperMini = {
       tbl_name = "<top_table>"
     end
     tbl_name = tostring(tbl_name) -- tbl_name が string でなくても安全なように
+    TDumperMini.indent_unit = tostring(TDumperMini.indent_unit) -- indent_unit も同様
     
     -- 出力
     table.insert(result, tbl_name .. " = {")
@@ -65,7 +66,6 @@ TDumperMini = {
   
   -- 実際にテーブルをダンプする関数(再帰関数)
   _inner_dump = function(tbl, key_path, indent, visited)
-    indent = indent or ""
     visited = visited or {}
     local result = {} -- 出力を溜める配列
     
@@ -79,18 +79,20 @@ TDumperMini = {
     
     -- テーブルに含まれる要素をチェックし、値の型によって動作を分ける
     for k, v in pairs(tbl) do
-      local key_str
+      local key_str = tostring(k) -- キー名を結合できるように string にする
       -- キーが string の時は "" で囲む
       if type(k) == "string" then
-        key_str = "\"" .. k .. "\""
-      else
-        key_str = tostring(k) -- キー名を安全に結合できるように string にする
+        key_str = "\"" .. key_str .. "\""
       end
+      
       local value_type = type(v)
       if value_type == "table" then
         -- 値がテーブルの時は、再帰的に子要素を検索
         table.insert(result, indent .. key_str .. " = {")
-        table_concat_array(result, TDumperMini._inner_dump(v, key_path .. "." .. key_str, indent .. TDumperMini.indent_unit, visited)) -- 再帰的呼び出し
+        -- 再帰的呼び出し
+        local new_key_path = key_path .. "." .. key_str
+        local new_indent = indent .. TDumperMini.indent_unit
+        table_concat_array(result, TDumperMini._inner_dump(v, new_key_path, new_indent, visited))
         table.insert(result, indent .. "},")
       elseif value_type == "string" then
         -- 値が string の時は "" で囲んで出力
