@@ -45,12 +45,14 @@ local StringBuilder = {
 string_builder_methods = {
   -- 文字列を追加(改行なし)
   append = function(self, text)
+    if text == nil then return self end
     self.data = self.data .. tostring(text)
     return self -- メソッドチェーンに対応
   end,
   
   -- 文字列を追加して改行
   append_line = function(self, text)
+    if text == nil then return self end
     self.data = self.data .. tostring(text) .. "\n"
     return self -- メソッドチェーンに対応
   end,
