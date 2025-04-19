@@ -15,7 +15,7 @@
     "tbl_A" = {
       "func" = function: 00000257ebc971e0,
       "tbl_B" = {
-        * 既に表示済み -> my_table.tbl_A
+        * 既に表示済み -> my_table."tbl_A"
       },
       <tostring() = "1行目
   2行目
@@ -32,8 +32,8 @@ end
 
 -- 本体
 local TDumperMini
-TDumperMini = { -- テーブルを表示する際の、1階層ごとにつけるインデント
-  INDENT_UNIT = "  ",
+TDumperMini = {
+  indent_unit = "  ", -- テーブルを表示する際の、1階層ごとにつけるインデント
   
   -- テーブルの中身を再帰的に表示する(循環参照も OK)
   -- tbl:table > 中身を表示したいテーブル
@@ -57,7 +57,7 @@ TDumperMini = { -- テーブルを表示する際の、1階層ごとにつける
     
     -- 出力
     table.insert(result, tbl_name .. " = {")
-    table_concat_array(result, TDumperMini._inner_dump(tbl, tbl_name, TDumperMini.INDENT_UNIT)) -- 実際にテーブルをダンプする処理(再帰関数)
+    table_concat_array(result, TDumperMini._inner_dump(tbl, tbl_name, TDumperMini.indent_unit)) -- 実際にテーブルをダンプする処理(再帰関数)
     table.insert(result, "}") -- 最後にテーブルを閉じる
     
     return table.concat(result, "\n")
@@ -90,7 +90,7 @@ TDumperMini = { -- テーブルを表示する際の、1階層ごとにつける
       if value_type == "table" then
         -- 値がテーブルの時は、再帰的に子要素を検索
         table.insert(result, indent .. key_str .. " = {")
-        table_concat_array(result, TDumperMini._inner_dump(v, key_path .. "." .. key_str, indent .. TDumperMini.INDENT_UNIT, visited)) -- 再帰的呼び出し
+        table_concat_array(result, TDumperMini._inner_dump(v, key_path .. "." .. key_str, indent .. TDumperMini.indent_unit, visited)) -- 再帰的呼び出し
         table.insert(result, indent .. "},")
       elseif value_type == "string" then
         -- 値が string の時は "" で囲んで出力
