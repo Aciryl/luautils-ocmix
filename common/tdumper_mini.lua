@@ -32,7 +32,7 @@ end
 
 -- 本体
 local TDumperMini
-TDumperMini = {-- テーブルを表示する際の、1階層ごとにつけるインデント
+TDumperMini = { -- テーブルを表示する際の、1階層ごとにつけるインデント
   INDENT_UNIT = "  ",
   
   -- テーブルの中身を再帰的に表示する(循環参照も OK)
@@ -40,7 +40,7 @@ TDumperMini = {-- テーブルを表示する際の、1階層ごとにつける�
   -- [tbl_name:string] > テーブル名(省略可)
   -- :string > 戻り値: テーブルの中身を表した文字列
   dump = function(tbl, tbl_name)
-    local result = {}-- 出力を溜める配列
+    local result = {} -- 出力を溜める配列
     
     -- tbl が table型では無かった時は、エラーメッセージを表示する
     if type(tbl) ~= "table" then
@@ -67,7 +67,7 @@ TDumperMini = {-- テーブルを表示する際の、1階層ごとにつける�
   _inner_dump = function(tbl, key_path, indent, visited)
     indent = indent or ""
     visited = visited or {}
-    local result = {}
+    local result = {} -- 出力を溜める配列
     
     -- 循環参照検出時はその先の検索を中止
     if visited[tbl] then
@@ -105,7 +105,7 @@ TDumperMini = {-- テーブルを表示する際の、1階層ごとにつける�
     local mt = getmetatable(tbl)
     if mt and type(mt.__tostring) == "function" then -- メタテーブルに __tostring が設定されている場合
       -- 出力
-      table.insert(result, indent .. "<tostring() = \"" .. tostring(tbl) .. "\">")
+      table.insert(result, indent .. "<tostring()> = \"" .. tostring(tbl) .. "\"")
     end
     
     return result
