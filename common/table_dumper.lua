@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.1.0
+-- Version = 1.1.1
 
 --[[ 使い方
   local table_dumper = require("table_dumper")
@@ -53,7 +53,7 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.1.0"
+local VERSION = "1.1.1"
 
 -- モジュールの読み込み
 local importer = require("lazy_importer")
@@ -189,26 +189,32 @@ TableDumper = {
     setmetatable(obj, {
       __index = function(_, key)
         return methods[key]
-      end
+      end,
     })
     
     return obj -- dump() が入ったオブジェクト
   end,
 }
 
+-- default_obj が無ければ生成
+local get_default_obj = function()
+  default_obj = default_obj or TableDumper.new()
+  return default_obj
+end
+
 -- TableDumper.new() するのが面倒な時用
 -- TableDumper:dump() とすると、default_obj:dump() になります
--- default_obj はこのモジュールの最後で、TableDumper.new() を代入しています
+-- default_obj は最初にアクセスされた時に、TableDumper.new() を代入しています
 -- TableDumper のオプションを変更すると、default_obj のオプションも変更されます
 -- print(TableDumper) とすると、ヘルプが表示されます
 setmetatable(TableDumper, {
   __index = function(_, key)
-    return default_obj[key] -- td_instance_defaults の中身は全て入っている
+    return get_default_obj()[key] -- td_instance_defaults の中身は全て入っている
   end,
   
   __newindex = function(_, key, value)
     td_instance_defaults[key] = value
-    rawset(default_obj, key, value) -- default_obj の値も更新
+    rawset(get_default_obj(), key, value) -- default_obj の値も更新
   end,
   
   __tostring = function(_)
@@ -294,10 +300,15 @@ methods = {
       end
     end
     
+    -- 間違えて dumper.dump() と呼んでいないかチェック(:dump() が正しい)
+    if not self or
+       type(self.dump) ~= "function" or
+       type(self._inner_dump) ~= "function" then
+      error("関数: TableDumper.dump() でエラーが発生しました\n:dump() で呼んでください(.dump() で呼ばれました)")
+    end
+    
     -- ロガーのチェック
-    if not self.logger then
-      error("関数: TableDumper.dump() でエラーが発生しました\nロガーが設定されていません")
-    elseif type(self.logger) ~= "table" then
+    if type(self.logger) ~= "table" then
       error("関数: TableDumper.dump() でエラーが発生しました\nロガーがテーブルではありません -> 型: " .. type(self.logger))
     elseif type(self.logger.error) ~= "function" then
       error("関数: TableDumper.dump() でエラーが発生しました\n<ロガー>.error が関数ではありません -> 型: " .. type(self.logger.error))
@@ -703,9 +714,6 @@ comparator = function(a, b)
   
   return false -- それ以外は判定不可
 end
-
--- default_obj を生成
-default_obj = TableDumper.new()
 
 return TableDumper
 
