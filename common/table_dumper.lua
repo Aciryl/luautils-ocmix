@@ -64,6 +64,13 @@ local default_logger = importer.lazy_import("simple_logger") -- デフォルト�
 local comparator = function(a, b)
   local type_a = type(a)
   local type_b = type(b)
+  -- 数字にできるものは数字で判断
+  if (type_a == "number" or tonumber(a) ~= nil) and
+     (type_b == "number" or tonumber(b) ~= nil) then
+    if tonumber(a) ~= tonumber(b) then
+      return tonumber(a) < tonumber(b)
+    end
+  end
   -- 文字列にして比較
   if (type_a == "string" or type_a == "number" or type_a == "boolean" or has_tostring(a)) and
      (type_b == "string" or type_b == "number" or type_b == "boolean" or has_tostring(b)) then
