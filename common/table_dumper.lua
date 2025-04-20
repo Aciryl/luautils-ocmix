@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.1.2
+-- Version = 1.1.3
 
 --[[ 使い方
   local table_dumper = require("table_dumper")
@@ -53,12 +53,12 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.1.2"
+local VERSION = "1.1.3"
 
 -- モジュールの読み込み
 local importer = require("lazy_importer")
 local string_builder = importer("string_builder") -- 文字列を継ぎ足して1つの文字列にする
-local default_logger = importer("simple_logger", true) -- デフォルトで使用するロガー(遅延読み込み)
+local default_logger = importer.lazy_import("simple_logger") -- デフォルトで使用するロガー(遅延読み込み)
 
 -- キーをソートする時に用いる関数
 local comparator = function(a, b)
@@ -179,8 +179,8 @@ TableDumper = {
   VERSION = VERSION,
   
   -- ロガーを設定した dump() が入っているテーブル(オブジェクト)を返します
-  -- [logger:default_logger] > エラーなどを出力するロガー(省略可)
-  --                           logger.error(msg:string) または logger.debug(msg:string) という形式でログ出力をするテーブルを想定しています
+  -- [logger:Logger] > エラーなどを出力するロガー(省略可)
+  --                   logger.error(msg:string) または logger.debug(msg:string) という形式でログ出力をするテーブルを想定しています
   --                   お使いのロガーと関数名などが合わない場合は、ラッパーを使用してください
   -- [verbose_level:number] > デバッグログの出力レベル(省略可)
   --                          0 でログなし
@@ -550,7 +550,7 @@ methods = {
           -- has_tostring(v) のチェックは debug.setmetatable() で設定した時用
           local value_str = tostring(v)
           if value_type ~= "string" then
-            key_str = "tostring(" .. key[#key] .. "[" .. key_str .. "])"
+            key_str = "tostring([" .. key_str .. "])"
           end
           
           -- key_formatter を呼ぶ
