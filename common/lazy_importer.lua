@@ -13,8 +13,14 @@
   遅延読み込み
   local lazy_module = importer(<モジュール名>, true)
   または
-  local lazy_module = importer.import(<モジュール名>, true)
+  local lazy_module = importer.lazy_import(<モジュール名>)
   ※ 遅延読み込みの場合、メタテーブルは変更できません(プロキシへの変更になってしまうので)
+  -> メタテーブルを使いたい場合は、
+     local lazy_module = importer(<モジュール名>, true, force_reload:boolean, true)
+     または
+     local lazy_module = importer.lazy_import_no_proxy(<モジュール名>)
+     を使ってください
+     この場合モジュールを使う時は lazy_module().xxx としてください
   ※ 遅延読み込みの場合、オプションの値はモジュールを読み込む時の値ではなく import をした時点の値を使うので注意(logger, change_message, msg_handler)
   
   強制再読み込み
@@ -50,7 +56,7 @@ LazyImporter = {
   msg_handler = msg_handler, -- メッセージを変更するメソッド
   
   -- モジュールを読み込む関数
-  import = function(module_name, lazy_load, force_reload)
+  import = function(module_name, lazy_load, force_reload, no_proxy)
     if type(module_name) ~= "string" then
       error("モジュール名は string型が必要です (現在の型: " .. type(module_name) ..")")
     end
@@ -74,37 +80,51 @@ LazyImporter = {
         return _module
       end
       
-      -- 遅延読み込み用のプロキシモジュール
-      local proxy_module = setmetatable({}, {
-        __index = function(_, key)
-          return get_module()[key]
-        end,
+      if no_proxy then
+        -- プロキシを使わない場合
+        return get_module -- 関数自体を返す(モジュール名() でアクセス)
+      else
+        -- プロキシを使う場合
+        -- 遅延読み込み用のプロキシモジュール
+        local proxy_module = setmetatable({}, {
+          __index = function(_, key)
+            return get_module()[key]
+          end,
+          
+          __newindex = function(_, key, value)
+            get_module()[key] = value
+          end,
+          
+          __pairs = function()
+            return pairs(get_module())
+          end,
+          
+          __ipairs = function()
+            return ipairs(get_module())
+          end,
+          
+          __call = function(_, ...)
+            return get_module()(...)
+          end,
+          
+          __tostring = function(_)
+            return tostring(get_module())
+          end,
+          
+          __metatable = false, -- メタテーブルを変更不可にする
+        })
         
-        __newindex = function(_, key, value)
-          get_module()[key] = value
-        end,
-        
-        __pairs = function()
-          return pairs(get_module())
-        end,
-        
-        __ipairs = function()
-          return ipairs(get_module())
-        end,
-        
-        __call = function(_, ...)
-          return get_module()(...)
-        end,
-        
-        __tostring = function(_)
-          return tostring(get_module())
-        end,
-        
-        __metatable = false, -- メタテーブルを変更不可にする
-      })
-      
-      return proxy_module
+        return proxy_module
+      end
     end
+  end,
+  
+  lazy_import = function(module_name, force_reload)
+    return LazyImporter.import(module_name, true, force_reload)
+  end,
+  
+  lazy_import_no_proxy = function(module_name, force_reload)
+    return LazyImporter.import(module_name, true, force_reload, true)
   end,
 }
 
@@ -147,3 +167,4 @@ load_module = function(module_name, force_reload, logger, change_message, msg_ha
 end
 
 return LazyImporter
+
