@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.1.3
+-- Version = 1.1.4
 
 --[[ 使い方
   local table_dumper = require("table_dumper")
@@ -53,7 +53,7 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.1.3"
+local VERSION = "1.1.4"
 
 -- モジュールの読み込み
 local importer = require("lazy_importer")
@@ -284,8 +284,7 @@ TableDumper.value_formatter:function or nil -- 値を string に変換する関�
 <-関数->
 TableDumper:dump(tbl:table[, tbl_name:string]):string -- テーブル(tbl)の中身を再帰的に表した文字列を返します。循環参照も OK。テーブル名(tbl_name)は戻り値のトップレベル名と、エラー出力時に使用されます
 TableDumper.new([logger:ロガー, [v_level:number]]):table -- オプションを個別に設定できます。戻り値は dump() などが入ったテーブル(オブジェクト)です
-TableDumper.new(引数):dump(tbl:table[, tbl_name:string]):string -- TableDumper:dump() と同じです。個別に設定したオプションを使ってダンプします
-]=]
+TableDumper.new(引数):dump(tbl:table[, tbl_name:string]):string -- TableDumper:dump() と同じです。個別に設定したオプションを使ってダンプします]=]
   end,
 })
 
@@ -296,14 +295,6 @@ methods = {
   -- [tbl_name:string] > テーブル名(省略可)
   -- :string > テーブルの中身を表した文字列(戻り値)
   dump = function(self, tbl, tbl_name)
-    -- ロガーを使ってデバッグログを出力する関数
-    -- logger.debug(msg:string) を想定、使用して出力します
-    local log_debug = function(level, msg)
-      if self.verbose_level >= level then
-        self.logger.debug(tostring(msg))
-      end
-    end
-    
     -- ロガーを使ってエラーログを出力する関数
     -- logger.error(msg:string) を想定、使用して出力します
     local log_error = function(sb, do_log_debug)
@@ -312,13 +303,13 @@ methods = {
       
       if self.strict_mode then -- strict_mode が true の時は代わりにエラーを投げる
         if do_log_debug then
-          log_debug(1, "エラーが発生したため、dump() を終了します。strict_mode なのでエラーを投げます")
+          self:_log_debug(1, "エラーが発生したため、dump() を終了します。strict_mode なのでエラーを投げます")
         end
         error(err_msg)
       else
         self.logger.error(err_msg)
         if do_log_debug then
-          log_debug(1, "エラーが発生したため、dump() を終了します -> 戻り値: nil")
+          self:_log_debug(1, "エラーが発生したため、dump() を終了します -> 戻り値: nil")
         end
       end
     end
@@ -355,7 +346,7 @@ methods = {
       return nil
     end
     
-    log_debug(1, "dump() が呼ばれました -> tbl: " .. tostring(tbl) .. ", tbl_name: " .. tostring(tbl_name))
+    self:_log_debug(1, "dump() が呼ばれました -> tbl: " .. tostring(tbl) .. ", tbl_name: " .. tostring(tbl_name))
     
     -- オプションの型チェック
     local result = self:_option_type_check(sb)
@@ -384,24 +375,37 @@ methods = {
     
     -- tbl が table型だった時の処理
     -- 結果を格納する変数(1つの string にする)
-    sb = string_builder.new()
+    sb = string_builder.new() -- key 部分
+    local sb2 = string_builder.new() -- value 部分
     
     -- トップレベルの表記
-    if tbl_name and tbl_name ~= "" then -- tbl_name が (nil か空文字)以外の時は "テーブル名 = {" と表示する
-      tbl_name = tostring(tbl_name) -- tbl_name が string でなくても安全なように
-      sb:append_line(tbl_name .. " = {")
-    else -- それ以外の時は "{" と表示する
-      sb:append_line("{")
-      tbl_name = tostring(self.top_table_name) -- 循環参照検出時に表示する名前
+    local key_str = tostring(tbl_name) -- tbl_name が string でなくても安全なように
+    local ref_key_str = key_str -- 循環参照検出時に表示する名前
+    
+    if tbl_name ~= nil and tbl_name ~= "" then
+      -- tbl_name が (nil か空文字)以外の時は "テーブル名 = " と表示する
+      sb:append(key_str .. " = ")
+    else
+      -- tbl_name が nil か空文字の時
+      key_str = "" -- キー名を空文字にする
+      ref_key_str = self.top_table_name -- 循環参照検出時に表示する名前
     end
     
     local indent = self.indent_unit -- 最初の階層のインデント
     
-    self:_inner_dump(sb, tbl, { tbl_name }, indent) -- 実際にテーブルをダンプする処理(再帰関数)
+    -- value 部分の出力
+    sb2:append_line("{")
+    self:_inner_dump(sb2, tbl, { ref_key_str }, indent) -- 実際にテーブルをダンプする処理(再帰関数)
+    sb2:append("}") -- テーブルを閉じる
     
-    sb:append("}") -- 最後にテーブルを閉じる
+    -- value_formatter を呼ぶ
+    local value_str = self:_format_value(tbl, sb2:tostring())
+    -- フックを呼ぶ
+    self:_call_hook(tbl_name, tbl, key_str, value_str, { ref_key_str })
+    -- key と連結
+    sb:append(value_str)
     
-    log_debug(1, "最後に到達したので dump() を終了します")
+    self:_log_debug(1, "最後に到達したので dump() を終了します")
     
     return sb:tostring() -- 結果を返す
   end,
@@ -414,58 +418,14 @@ methods = {
   -- [visited:table] > 既にダンプしたテーブルの一覧(循環参照検出時に使う)(省略可)
   -- :string > テーブルをダンプした文字列(戻り値)
   _inner_dump = function(self, sb, tbl, key, indent, visited)
-    -- ロガーを使ってデバッグログを出力する関数
-    -- logger.debug(msg:string) を想定、使用して出力します
-    local log_debug = function(level, msg)
-      if self.verbose_level >= level then
-        self.logger.debug(tostring(msg))
-      end
-    end
-    
-    -- formatter を呼ぶ関数
-    local _format_data = function(data, data_str, kind)
-      local formatted_data = data_str
-      -- formatter を設定
-      local formatter = self.key_formatter
-      if kind == "value" then formatter = self.value_formatter end
-      
-      -- 変換
-      if formatter then
-        formatted_data = tostring(formatter(data, data_str))
-        -- ログを出す
-        if formatted_data ~= data_str then
-          local kind_name = "キー"
-          if kind == "value" then kind_name = "値" end
-          log_debug(2, kind .. "_formatter で" .. kind_name .. "が変換されました -> " .. kind .. ": " .. data_str .. " → " .. formatted_data)
-        end
-      end
-      
-      return formatted_data
-    end
-    -- key_formatter を呼ぶ関数
-    local format_key = function(k, k_str)
-      return _format_data(k, k_str, "key")
-    end
-    -- value_formatter を呼ぶ関数
-    local format_value = function(v, value_str)
-      return _format_data(v, value_str, "value")
-    end
-    
-    -- フックを呼ぶ関数
-    local call_hook = function(k, v, key_str, value_str, key_array)
-      if self.on_value_dumped then
-        self.on_value_dumped(k, v, key_str, value_str, key_array)
-      end
-    end
-    
-    log_debug(2, "_inner_dump() が呼ばれました -> key: " .. helpers.key_to_str(key))
+    self:_log_debug(2, "_inner_dump() が呼ばれました -> key: " .. helpers.key_to_str(key))
     
     visited = visited or {}
     
     -- 最大深度判定
     if self.max_depth >= 0 and #key > self.max_depth then
       sb:append_line(indent .. "( 最大深度に到達 )")
-      log_debug(1, "最大深度に到達したため、要素の検索を中止します -> key: " .. helpers.key_to_str(key))
+      self:_log_debug(1, "最大深度に到達したため、要素の検索を中止します -> key: " .. helpers.key_to_str(key))
       return
     end
     
@@ -478,7 +438,7 @@ methods = {
       if helpers.starts_with_array(key, visited[tbl]) then ref = "循環参照" end
       -- 出力
       sb:append_line(indent .. "* 既に表示済み(" .. ref .. ") -> " .. helpers.key_to_str(visited[tbl]))
-      log_debug(2, ref .. "を検出したため、要素の検索を中止します -> 検出したkey: " .. helpers.key_to_str(visited[tbl]) .. " 現在のkey: " .. helpers.key_to_str(key))
+      self:_log_debug(2, ref .. "を検出したため、要素の検索を中止します -> 検出したkey: " .. helpers.key_to_str(visited[tbl]) .. " 現在のkey: " .. helpers.key_to_str(key))
       return
     end
     -- tbl をダンプ済みテーブルとしてマークする
@@ -495,7 +455,7 @@ methods = {
       -- 1つのテーブルに表示する最大要素数に達したら、ループを抜ける
       if self.max_items_per_table >= 0 and count > self.max_items_per_table then
         sb:append_line(indent .. "=== AND MORE ===")
-        log_debug(1, "最大要素数に到達したため、要素の検索を中止します -> key: " .. helpers.key_to_str(key))
+        self:_log_debug(1, "最大要素数に到達したため、要素の検索を中止します -> key: " .. helpers.key_to_str(key))
         break
       end
       
@@ -503,19 +463,19 @@ methods = {
       
       -- スキップする型に設定されていたら何も書かない
       if self.ignore_key_types and self.ignore_key_types[type(k)] then
-        log_debug(1, "ignore_key_types によりスキップされました -> key: " .. tostring(k) .. ", type: " .. type(k))
+        self:_log_debug(1, "ignore_key_types によりスキップされました -> key: " .. tostring(k) .. ", type: " .. type(k))
       else
       -- ignore_value_types によるスキップ
       if self.ignore_value_types and self.ignore_value_types[type(v)] then
-        log_debug(1, "ignore_value_types によりスキップされました -> value: " .. tostring(v) .. ", type: " .. type(v))
+        self:_log_debug(1, "ignore_value_types によりスキップされました -> value: " .. tostring(v) .. ", type: " .. type(v))
       else
       -- key_filter によるスキップ
       if self.key_filter and not self.key_filter(k) then
-        log_debug(1, "key_filter によりスキップされました -> key: " .. tostring(k))
+        self:_log_debug(1, "key_filter によりスキップされました -> key: " .. tostring(k))
       else
       -- value_filter によるスキップ
       if self.value_filter and not self.value_filter(v) then
-        log_debug(1, "value_filter によりスキップされました -> value: " .. tostring(v))
+        self:_log_debug(1, "value_filter によりスキップされました -> value: " .. tostring(v))
       else
         count = count + 1
         -- テーブルに含まれる要素をチェックし、値の型によって動作を分ける
@@ -529,7 +489,7 @@ methods = {
         if value_type == "table" then
           -- 値がテーブルの時は、再帰的に子要素を検索
           -- key_formatter を呼ぶ
-          key_str = format_key(k, key_str)
+          key_str = self:_format_key(k, key_str)
           
           local sb2 = string_builder.new()
           sb:append(indent .. key_str .. " = ")
@@ -540,10 +500,10 @@ methods = {
           --------------------------------
           sb2:append(indent .. "}")
           
-           -- value_formatter を呼ぶ
-          local value_str = format_value(v, sb2:tostring())
+          -- value_formatter を呼ぶ
+          local value_str = self:_format_value(v, sb2:tostring())
           -- フックを呼ぶ
-          call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
+          self:_call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
           -- 出力
           sb:append_line(value_str .. ",")
         elseif value_type == "string" or has_tostring(v) then
@@ -554,7 +514,7 @@ methods = {
           end
           
           -- key_formatter を呼ぶ
-          key_str = format_key(k, key_str)
+          key_str = self:_format_key(k, key_str)
           local prefix = key_str .. " = "
           
           -- インデントを付ける
@@ -566,22 +526,22 @@ methods = {
           value_str = "\"" .. value_str .. "\""
           
           -- value_formatter を呼ぶ
-          value_str = format_value(v, value_str)
+          value_str = self:_format_value(v, value_str)
           
           -- フックを呼ぶ
-          call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
+          self:_call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
           
           -- 出力
           sb:append_line(indent .. prefix .. value_str .. ",")
         else
           -- 値がそれ以外の時は、そのまま string に変換して出力
           -- key_formatter を呼ぶ
-          key_str = format_key(k, key_str)
+          key_str = self:_format_key(k, key_str)
           -- value_formatter を呼ぶ
-          local value_str = format_value(v, tostring(v))
+          local value_str = self:_format_value(v, tostring(v))
           
           -- フックを呼ぶ
-          call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
+          self:_call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
           
           sb:append_line(indent .. key_str .. " = " .. value_str .. ",")
         end
@@ -627,7 +587,7 @@ methods = {
       end
     end
     
-    log_debug(2, "最後に到達したので _inner_dump() を終了します -> key: " .. helpers.key_to_str(key))
+    self:_log_debug(2, "最後に到達したので _inner_dump() を終了します -> key: " .. helpers.key_to_str(key))
   end,
   
   -- 全てのオプションの型チェックをする
@@ -676,6 +636,50 @@ methods = {
     
     return result
   end,
+  
+  -- ロガーを使ってデバッグログを出力する関数
+  -- logger.debug(msg:string) を想定、使用して出力します
+  _log_debug = function(self, level, msg)
+    if self.verbose_level >= level then
+      self.logger.debug(tostring(msg))
+    end
+  end,
+  
+  -- formatter を呼ぶ関数
+  _format_data = function(self, data, data_str, kind)
+    local formatted_data = data_str
+    -- formatter を設定
+    local formatter = self.key_formatter
+    if kind == "value" then formatter = self.value_formatter end
+    
+    -- 変換
+    if formatter then
+      formatted_data = tostring(formatter(data, data_str))
+      -- ログを出す
+      if formatted_data ~= data_str then
+        local kind_name = "キー"
+        if kind == "value" then kind_name = "値" end
+        self:_log_debug(2, kind .. "_formatter で" .. kind_name .. "が変換されました -> " .. kind .. ": " .. data_str .. " → " .. formatted_data)
+      end
+    end
+    
+    return formatted_data
+  end,
+  -- key_formatter を呼ぶ関数
+  _format_key = function(self, k, k_str)
+    return self:_format_data(k, k_str, "key")
+  end,
+  -- value_formatter を呼ぶ関数
+  _format_value = function(self, v, value_str)
+    return self:_format_data(v, value_str, "value")
+  end,
+  
+  -- フックを呼ぶ関数
+  _call_hook = function(self, k, v, key_str, value_str, key_array)
+    if self.on_value_dumped then
+      self.on_value_dumped(k, v, key_str, value_str, key_array)
+    end
+  end,
 }
 
 helpers = {
@@ -714,3 +718,4 @@ helpers = {
 }
 
 return TableDumper
+
