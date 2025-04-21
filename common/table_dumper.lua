@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.1.5
+-- Version = 1.1.6
 
 --[[ 使い方
   local table_dumper = require("table_dumper")
@@ -53,7 +53,7 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.1.5"
+local VERSION = "1.1.6"
 
 -- モジュールの読み込み
 local importer = require("lazy_importer")
@@ -96,7 +96,7 @@ local comparator = function(a, b)
     end
   end
   
-  return false -- それ以外は判定不可
+  return false -- それ以外は判定不能
 end
 
 -- __tostring が定義されているかどうかを判定する
@@ -138,12 +138,12 @@ local td_instance_defaults = {
   ignore_key_types = {},
   -- 表示をスキップする値の型の一覧。{ function = true } のように書く。値が nil か false ならスキップしない
   ignore_value_types = {},
-  -- 表示するキーを選別する関数。function(key:全ての型):boolean の形で、true を返したキーのみを表示します
+  -- 表示する要素を選別する関数。function(key:全ての型, value:全ての型):boolean の形で、true を返した要素のみを表示します
   -- nil を設定すると、フィルタリングをスキップします(全て表示)
-  key_filter = nil,
-  -- 表示する値を選別する関数。function(value:全ての型):boolean の形で、true を返した値のみを表示します
+  filter = nil,
+  -- ダンプ後に要素を表示するか決定する関数。function(key:全ての型, value:全ての型, key_str:string, value_str:string):boolean の形で、true を返した要素のみを表示します
   -- nil を設定すると、フィルタリングをスキップします(全て表示)
-  value_filter = nil,
+  post_filter = nil,
   
   -- dump() のテーブル名を省略した場合に、代わりに表示される名前(循環参照検出時のみ)
   top_table_name = "<top_table>",
@@ -213,8 +213,8 @@ TableDumper = {
     obj.show_metatable = template.show_metatable
     obj.ignore_key_types = template.ignore_key_types
     obj.ignore_value_types = template.ignore_value_types
-    obj.key_filter = template.key_filter
-    obj.value_filter = template.value_filter
+    obj.filter = template.filter
+    obj.post_filter = template.post_filter
     obj.top_table_name = template.top_table_name
     obj.strict_mode = template.strict_mode
     obj.on_value_dumped = template.on_value_dumped
@@ -279,8 +279,8 @@ TableDumper.show_tostring:boolean -- テーブルに __tostring が設定され�
 TableDumper.show_metatable:boolean -- メタテーブルが設定されているかどうかの表示フラグ
 TableDumper.ignore_key_types:table -- 表示をスキップするキーの型一覧。{ function = true } のように書く。値が nil か false なら表示されます
 TableDumper.ignore_value_types:table -- 表示をスキップする値の型一覧。{ function = true } のように書く。値が nil か false なら表示されます
-TableDumper.key_filter:function or nil -- 表示するキーを選別する関数。function(key:全ての型):boolean の形で、true を返したキーのみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
-TableDumper.value_filter:function or nil -- 表示する値を選別する関数。function(value:全ての型):boolean の形で、true を返した値のみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
+TableDumper.filter:function or nil -- 表示する要素を選別する関数。function(key:全ての型, value:全ての型):boolean の形で、true を返した要素のみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
+TableDumper.post_filter:function or nil -- ダンプ後に要素を表示するか決定する関数。function(key:全ての型, value:全ての型, key_str:string, value_str:string):boolean の形で、true を返した要素のみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
 TableDumper.comparator:function or nil -- テーブルのキーをソートする時に用いる比較用の関数。function(a:全ての型, b:全ての型):boolean の形式で a < b の時 true を返す関数
 TableDumper.top_table_name:string -- dump() のテーブル名を省略した場合に、代わりに表示される名前(循環参照検出時のみ)
 TableDumper.strict_mode:boolean -- true にするとエラーログの代わりにエラーを投げます
@@ -407,14 +407,23 @@ methods = {
     
     -- value_formatter を呼ぶ
     local value_str = self:_format_value(tbl, sb2:tostring())
-    -- フックを呼ぶ
-    self:_call_hook(tbl_name, tbl, key_str, value_str, { ref_key_str })
-    -- key と連結
-    sb:append(value_str)
+    
+    local result2
+    -- post_filter によるスキップチェック
+    if self:_should_output(k, v, key_str, value_str) then
+      -- フックを呼ぶ
+      self:_call_hook(tbl_name, tbl, key_str, value_str, { ref_key_str })
+      -- key と連結
+      sb:append(value_str)
+      -- 結果を格納
+      result2 = sb:tostring()
+    else
+      result2 = ref_key_str .. " -> post_filter によりスキップされました"
+    end
     
     self:_log_debug(1, "最後に到達したので dump() を終了します")
     
-    return sb:tostring() -- 結果を返す
+    return result2 -- 結果を返す
   end,
   
   -- 実際にテーブルをダンプする関数(再帰関数)
@@ -476,13 +485,9 @@ methods = {
       if self.ignore_value_types and self.ignore_value_types[type(v)] then
         self:_log_debug(1, "ignore_value_types によりスキップされました -> value: " .. tostring(v) .. ", type: " .. type(v))
       else
-      -- key_filter によるスキップ
-      if self.key_filter and not self.key_filter(k) then
-        self:_log_debug(1, "key_filter によりスキップされました -> key: " .. tostring(k))
-      else
-      -- value_filter によるスキップ
-      if self.value_filter and not self.value_filter(v) then
-        self:_log_debug(1, "value_filter によりスキップされました -> value: " .. tostring(v))
+      -- filter によるスキップ
+      if self.filter and not self.filter(k, v) then
+        self:_log_debug(1, "filter によりスキップされました -> key: " .. tostring(k) .. ", value: " .. tostring(v))
       else
         count = count + 1
         -- テーブルに含まれる要素をチェックし、値の型によって動作を分ける
@@ -499,7 +504,6 @@ methods = {
           key_str = self:_format_key(k, key_str)
           
           local sb2 = string_builder.new()
-          sb:append(indent .. key_str .. " = ")
           sb2:append_line("{")
           --------------------------------
           -- 再帰的呼び出し(子要素を検索)
@@ -509,10 +513,15 @@ methods = {
           
           -- value_formatter を呼ぶ
           local value_str = self:_format_value(v, sb2:tostring())
-          -- フックを呼ぶ
-          self:_call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
-          -- 出力
-          sb:append_line(value_str .. ",")
+          
+          -- post_filter によるスキップチェック
+          if self:_should_output(k, v, key_str, value_str) then
+            -- フックを呼ぶ
+            self:_call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
+            -- 出力
+            sb:append(indent .. key_str .. " = ")
+            sb:append_line(value_str .. ",")
+          end
         elseif value_type == "string" or has_tostring(v) then
           -- has_tostring(v) のチェックは debug.setmetatable() で設定した時用
           local value_str = tostring(v)
@@ -535,11 +544,13 @@ methods = {
           -- value_formatter を呼ぶ
           value_str = self:_format_value(v, value_str)
           
-          -- フックを呼ぶ
-          self:_call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
-          
-          -- 出力
-          sb:append_line(indent .. prefix .. value_str .. ",")
+          -- post_filter によるスキップチェック
+          if self:_should_output(k, v, key_str, value_str) then
+            -- フックを呼ぶ
+            self:_call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
+            -- 出力
+            sb:append_line(indent .. prefix .. value_str .. ",")
+          end
         else
           -- 値がそれ以外の時は、そのまま string に変換して出力
           -- key_formatter を呼ぶ
@@ -547,12 +558,14 @@ methods = {
           -- value_formatter を呼ぶ
           local value_str = self:_format_value(v, tostring(v))
           
-          -- フックを呼ぶ
-          self:_call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
-          
-          sb:append_line(indent .. key_str .. " = " .. value_str .. ",")
+          -- post_filter によるスキップチェック
+          if self:_should_output(k, v, key_str, value_str) then
+            -- フックを呼ぶ
+            self:_call_hook(k, v, key_str, value_str, helpers.insert_copy(key, key_str))
+            -- 出力
+            sb:append_line(indent .. key_str .. " = " .. value_str .. ",")
+          end
         end
-      end
       end
       end
       end
@@ -632,8 +645,8 @@ methods = {
     result = type_check("show_metatable", type(self.show_metatable), "boolean", true) and result
     result = type_check("ignore_key_types", type(self.ignore_key_types), "table", true) and result
     result = type_check("ignore_value_types", type(self.ignore_value_types), "table", true) and result
-    result = type_check("key_filter", type(self.key_filter), "function", true) and result
-    result = type_check("value_filter", type(self.value_filter), "function", true) and result
+    result = type_check("filter", type(self.filter), "function", true) and result
+    result = type_check("post_filter", type(self.post_filter), "function", true) and result
     result = type_check("strict_mode", type(self.strict_mode), "boolean", true) and result
     result = type_check("top_table_name", type(self.top_table_name), "string") and result
     result = type_check("on_value_dumped", type(self.on_value_dumped), "function", true) and result
@@ -679,6 +692,15 @@ methods = {
   -- value_formatter を呼ぶ関数
   _format_value = function(self, v, value_str)
     return self:_format_data(v, value_str, "value")
+  end,
+  
+  -- post_filter によるスキップ
+  _should_output = function(self, k, v, key_str, value_str)
+    if self.post_filter and not self.post_filter(k, v, key_str, value_str) then
+      self:_log_debug(2, "post_filter によりスキップされました -> key: " .. tostring(k) .. ", value: " .. tostring(v) .. ", key_str: " .. key_str .. ", value_str: " .. value_str)
+      return false
+    end
+    return true
   end,
   
   -- フックを呼ぶ関数
