@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.1.6
+-- Version = 1.1.7
 
 --[[ 使い方
   local table_dumper = require("table_dumper")
@@ -53,7 +53,7 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.1.6"
+local VERSION = "1.1.7"
 
 -- モジュールの読み込み
 local importer = require("lazy_importer")
@@ -159,8 +159,10 @@ local td_instance_defaults = {
   -- 値を string に変換する関数。function(value:全ての型, value_str:string):string という形で、value は生の値、value_str は値をデフォルトの変換方式で変換した文字列です。戻り値を tostring() したものを使います。function の代わりに nil を設定すると、デフォルトの変換方式で表示します
   value_formatter = nil,
   
-  -- キーをソートする時に用いる関数
+  -- キーでソートする時に用いる関数
   comparator = comparator,
+  -- 値でソートする時に用いる関数
+  value_comparator = nil,
   
   -- エラーなどを出力するロガー
   -- logger.error(msg:string) または logger.debug(msg:string) という形式でログ出力をするテーブルを想定しています
@@ -221,6 +223,7 @@ TableDumper = {
     obj.key_formatter = template.key_formatter
     obj.value_formatter = template.value_formatter
     obj.comparator = template.comparator
+    obj.value_comparator = template.value_comparator
     obj.logger = template.logger
     obj.verbose_level = template.verbose_level
     
@@ -281,7 +284,8 @@ TableDumper.ignore_key_types:table -- 表示をスキップするキーの型一
 TableDumper.ignore_value_types:table -- 表示をスキップする値の型一覧。{ function = true } のように書く。値が nil か false なら表示されます
 TableDumper.filter:function or nil -- 表示する要素を選別する関数。function(key:全ての型, value:全ての型):boolean の形で、true を返した要素のみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
 TableDumper.post_filter:function or nil -- ダンプ後に要素を表示するか決定する関数。function(key:全ての型, value:全ての型, key_str:string, value_str:string):boolean の形で、true を返した要素のみを表示します。nil を設定すると、フィルタリングをスキップします(全て表示)
-TableDumper.comparator:function or nil -- テーブルのキーをソートする時に用いる比較用の関数。function(a:全ての型, b:全ての型):boolean の形式で a < b の時 true を返す関数
+TableDumper.comparator:function or nil -- テーブルのキーでソートする時に用いる比較用の関数。function(key_a:全ての型, key_b:全ての型):boolean の形式で key_a < key_b の時 true を返す関数
+TableDumper.value_comparator:function or nil -- テーブルの値でソートする時に用いる比較用の関数。function(value_a:全ての型, value_b:全ての型):boolean or nil の形式で value_a < value_b の時 true を返す関数。nil を返すとソートをキーに任せます
 TableDumper.top_table_name:string -- dump() のテーブル名を省略した場合に、代わりに表示される名前(循環参照検出時のみ)
 TableDumper.strict_mode:boolean -- true にするとエラーログの代わりにエラーを投げます
 TableDumper.on_value_dumped:function or nil -- 値をダンプする直前に呼ばれるフック。function(key:全ての型, value:全ての型, key_str:string, value_str:string, key_array:table) の形で、key と value は生のキーと値、key_str と value_str は実際に表示するキーと値の文字列、key_array は親のキーから順番に子どものキーを挿入していった文字列の配列です
@@ -410,7 +414,7 @@ methods = {
     
     local result2
     -- post_filter によるスキップチェック
-    if self:_should_output(k, v, key_str, value_str) then
+    if self:_should_output(tbl_name, tbl, key_str, value_str) then
       -- フックを呼ぶ
       self:_call_hook(tbl_name, tbl, key_str, value_str, { ref_key_str })
       -- key と連結
@@ -460,14 +464,26 @@ methods = {
     -- tbl をダンプ済みテーブルとしてマークする
     visited[tbl] = key
     
-    -- ソートする
+    -- テーブルをソートする
     local list = {}
-    for key2, _ in pairs(tbl) do list[#list + 1] = key2 end
-    if self.comparator then table.sort(list, self.comparator) end
+    for k, v in pairs(tbl) do list[#list + 1] = { key = k, value = v } end
+    if self.comparator or self.value_comparator then -- コンパレータが設定されている時
+      table.sort(list, function(a, b) -- ソート
+        local result
+        if self.value_comparator then
+          result = self.value_comparator(a.value, b.value) -- 先に値でソート
+        end
+        -- 値でソートされなかったら、キーでソート
+        if result == nil then
+          return self.comparator(a.key, b.key)
+        end
+        return result
+      end)
+    end
     
     -- ループ
     local count = 1
-    for _, k in ipairs(list) do
+    for _, pair in ipairs(list) do
       -- 1つのテーブルに表示する最大要素数に達したら、ループを抜ける
       if self.max_items_per_table >= 0 and count > self.max_items_per_table then
         sb:append_line(indent .. "=== AND MORE ===")
@@ -475,7 +491,8 @@ methods = {
         break
       end
       
-      local v = tbl[k]
+      local k = pair.key
+      local v = pair.value
       
       -- スキップする型に設定されていたら何も書かない
       if self.ignore_key_types and self.ignore_key_types[type(k)] then
@@ -595,7 +612,7 @@ methods = {
       -- メタテーブルが 1つ以上設定されているときだけ表示
       if #list > 0 then
         -- メタテーブルをソートする
-        if self.comparator then table.sort(list, self.comparator) end
+        if self.comparator then table.sort(list, self.comparator) end -- キーのみでソート
         
         -- 出力
         sb:append_line(indent .. "<metatable> = {")
@@ -653,6 +670,7 @@ methods = {
     result = type_check("key_formatter", type(self.key_formatter), "function", true) and result
     result = type_check("value_formatter", type(self.value_formatter), "function", true) and result
     result = type_check("comparator", type(self.comparator), "function", true) and result
+    result = type_check("value_comparator", type(self.value_comparator), "function", true) and result
     
     return result
   end,
