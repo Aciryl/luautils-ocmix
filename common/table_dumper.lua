@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.1.7
+-- Version = 1.1.8
 
 --[[ 使い方
   local table_dumper = require("table_dumper")
@@ -53,7 +53,7 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.1.7"
+local VERSION = "1.1.8"
 
 -- モジュールの読み込み
 local importer = require("lazy_importer")
@@ -474,7 +474,7 @@ methods = {
           result = self.value_comparator(a.value, b.value) -- 先に値でソート
         end
         -- 値でソートされなかったら、キーでソート
-        if result == nil then
+        if result == nil and self.comparator then
           return self.comparator(a.key, b.key)
         end
         return result
