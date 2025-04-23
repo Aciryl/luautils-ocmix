@@ -2,7 +2,7 @@
 -- テーブルの中身を再帰的に表示する
 ------------------------------------
 
--- Version = 1.1.8
+-- Version = 1.1.9
 
 --[[ 使い方
   local table_dumper = require("table_dumper")
@@ -53,12 +53,22 @@
 ]]
 
 -- table_dumper モジュールのバージョン
-local VERSION = "1.1.8"
+local VERSION = "1.1.9"
 
 -- モジュールの読み込み
 local importer = require("lazy_importer")
+-- モジュール読み込みエラーのメッセージを変更する関数
+importer.err_msg_formatter = function(original_err_msg, module_name)
+  if original_err_msg:match("module '" .. module_name .. "' not found") then
+    return "モジュールが見つかりません: " .. module_name
+  else
+    return "モジュールの読み込み中にエラーが発生しました:\n" .. original_err_msg
+  end
+end
+-- 他のモジュールを読み込み
 local string_builder = importer("string_builder") -- 文字列を継ぎ足して1つの文字列にする
 local default_logger = importer.lazy_import("simple_logger") -- デフォルトで使用するロガー(遅延読み込み)
+importer.err_msg_formatter = nil
 
 -- キーをソートする時に用いる関数
 local comparator = function(a, b)
